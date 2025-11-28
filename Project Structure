@@ -1,0 +1,16 @@
+process-optima-ai/
+├── backend/
+│   ├── src/
+│   │   ├── app.ts
+│   │   ├── dataCollector.ts
+│   │   ├── aiAnalyzer.ts
+│   │   ├── forecasting.ts
+│   │   └── types/
+│   ├── package.json
+│   └── tsconfig.json
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── docker-compose.yml
+└── README.md
