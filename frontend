@@ -1,0 +1,724 @@
+**frontend/package.json**
+{
+  "name": "process-optima-ai-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "docker:build": "docker build -t process-optima-ai-frontend ."
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.2",
+    "recharts": "^2.8.0",
+    "lucide-react": "^0.263.1",
+    "tailwindcss": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.15",
+    "@types/react-dom": "^18.2.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "typescript": "^5.0.2",
+    "vite": "^4.4.5"
+  }
+}
+
+**frontend/vite.config.ts**
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    host: true
+  },
+  define: {
+    'process.env': {}
+  }
+})
+ **frontend/src/types/index.ts**
+ export interface ProcessInfo {
+  pid: number;
+  name: string;
+  cpuUsage: number;
+  memoryUsage: number;
+  priority: number;
+  state: string;
+  command: string;
+}
+
+export interface SystemMetrics {
+  timestamp: number;
+  cpu: {
+    usage: number;
+    cores: number;
+    temperature?: number;
+    processes: ProcessInfo[];
+    loadAverage: number[];
+  };
+  memory: {
+    total: number;
+    used: number;
+    free: number;
+    usagePercent: number;
+    active: number;
+    available: number;
+  };
+  disk: {
+    total: number;
+    used: number;
+    free: number;
+    usagePercent: number;
+    readBytes: number;
+    writeBytes: number;
+  };
+  network: {
+    bytesIn: number;
+    bytesOut: number;
+    packetsIn: number;
+    packetsOut: number;
+  };
+}
+
+export interface BottleneckAnalysis {
+  type: 'CPU' | 'MEMORY' | 'DISK' | 'NETWORK' | 'PROCESS';
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  description: string;
+  process?: ProcessInfo;
+  metric: number;
+  threshold: number;
+}
+
+export interface AIAnalysis {
+  bottlenecks: BottleneckAnalysis[];
+  overallHealth: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  performanceScore: number;
+  anomalyDetected: boolean;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+}
+
+export interface ForecastData {
+  timestamp: number;
+  predictedCpuUsage: number;
+  predictedMemoryUsage: number;
+  predictedDiskUsage: number;
+  confidence: number;
+}
+
+export interface OptimizationRecommendation {
+  type: 'PROCESS_OPTIMIZATION' | 'RESOURCE_ALLOCATION' | 'CONFIGURATION' | 'SCALING';
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  title: string;
+  description: string;
+  action: string;
+  impact: 'LOW' | 'MEDIUM' | 'HIGH';
+  estimatedSavings?: string;
+}
+
+export interface SystemInsights {
+  timestamp: string;
+  systemMetrics: SystemMetrics;
+  aiAnalysis: AIAnalysis;
+  forecasts: ForecastData[];
+  recommendations: OptimizationRecommendation[];
+}
+
+**frontend/src/hooks/useSocket.ts**
+import { useEffect, useRef, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+import { SystemInsights } from '../types';
+
+export const useSocket = (url: string = 'http://localhost:3000') => {
+  const socketRef = useRef<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [insights, setInsights] = useState<SystemInsights | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    socketRef.current = io(url);
+
+    socketRef.current.on('connect', () => {
+      setIsConnected(true);
+      setError(null);
+    });
+
+    socketRef.current.on('disconnect', () => {
+      setIsConnected(false);
+    });
+
+    socketRef.current.on('system_insights', (data: SystemInsights) => {
+      setInsights(data);
+      setError(null);
+    });
+
+    socketRef.current.on('connect_error', (err) => {
+      setError(`Connection error: ${err.message}`);
+      setIsConnected(false);
+    });
+
+    return () => {
+      socketRef.current?.disconnect();
+    };
+  }, [url]);
+
+  const startMonitoring = () => {
+    socketRef.current?.emit('start_monitoring');
+  };
+
+  const stopMonitoring = () => {
+    socketRef.current?.emit('stop_monitoring');
+  };
+
+  return {
+    isConnected,
+    insights,
+    error,
+    startMonitoring,
+    stopMonitoring
+  };
+};
+
+**frontend/src/components/ResourceGauge.tsx**
+import React from 'react';
+
+interface ResourceGaugeProps {
+  value: number;
+  max: number;
+  label: string;
+  type: 'cpu' | 'memory' | 'disk';
+  size?: 'sm' | 'md' | 'lg';
+}
+
+export const ResourceGauge: React.FC<ResourceGaugeProps> = ({
+  value,
+  max,
+  label,
+  type,
+  size = 'md'
+}) => {
+  const percentage = (value / max) * 100;
+  
+  const getColor = (percent: number) => {
+    if (percent < 50) return 'text-green-500';
+    if (percent < 80) return 'text-yellow-500';
+    return 'text-red-500';
+  };
+
+  const getBgColor = (percent: number) => {
+    if (percent < 50) return 'bg-green-500';
+    if (percent < 80) return 'bg-yellow-500';
+    return 'bg-red-500';
+  };
+
+  const sizes = {
+    sm: 'w-20 h-20',
+    md: 'w-32 h-32',
+    lg: 'w-48 h-48'
+  };
+
+  const icons = {
+    cpu: '⚡',
+    memory: '🧠',
+    disk: '💾'
+  };
+
+  return (
+    <div className="flex flex-col items-center">
+      <div className={`relative ${sizes[size]}`}>
+        <svg className="w-full h-full" viewBox="0 0 120 120">
+          {/* Background circle */}
+          <circle
+            cx="60"
+            cy="60"
+            r="54"
+            fill="none"
+            stroke="#e5e7eb"
+            strokeWidth="8"
+          />
+          {/* Progress circle */}
+          <circle
+            cx="60"
+            cy="60"
+            r="54"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={`${percentage * 3.39} 339`}
+            className={getBgColor(percentage)}
+            transform="rotate(-90 60 60)"
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-2xl">{icons[type]}</span>
+          <span className={`text-xl font-bold ${getColor(percentage)}`}>
+            {Math.round(value)}%
+          </span>
+        </div>
+      </div>
+      <span className="mt-2 text-sm font-medium text-gray-700">{label}</span>
+    </div>
+  );
+};
+
+**frontend/src/components/BottleneckList.tsx**
+import React from 'react';
+import { AlertTriangle, AlertCircle, Info, XCircle } from 'lucide-react';
+import { BottleneckAnalysis } from '../types';
+
+interface BottleneckListProps {
+  bottlenecks: BottleneckAnalysis[];
+}
+
+export const BottleneckList: React.FC<BottleneckListProps> = ({ bottlenecks }) => {
+  const getSeverityIcon = (severity: string) => {
+    switch (severity) {
+      case 'CRITICAL':
+        return <XCircle className="w-5 h-5 text-red-500" />;
+      case 'HIGH':
+        return <AlertCircle className="w-5 h-5 text-orange-500" />;
+      case 'MEDIUM':
+        return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
+      default:
+        return <Info className="w-5 h-5 text-blue-500" />;
+    }
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'CRITICAL':
+        return 'border-red-200 bg-red-50';
+      case 'HIGH':
+        return 'border-orange-200 bg-orange-50';
+      case 'MEDIUM':
+        return 'border-yellow-200 bg-yellow-50';
+      default:
+        return 'border-blue-200 bg-blue-50';
+    }
+  };
+
+  if (bottlenecks.length === 0) {
+    return (
+      <div className="p-4 text-center text-gray-500">
+        No bottlenecks detected. System is running optimally.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {bottlenecks.map((bottleneck, index) => (
+        <div
+          key={index}
+          className={`p-4 border rounded-lg ${getSeverityColor(bottleneck.severity)}`}
+        >
+          <div className="flex items-start space-x-3">
+            {getSeverityIcon(bottleneck.severity)}
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-gray-900">
+                  {bottleneck.type} Bottleneck
+                </h4>
+                <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                  bottleneck.severity === 'CRITICAL' ? 'bg-red-100 text-red-800' :
+                  bottleneck.severity === 'HIGH' ? 'bg-orange-100 text-orange-800' :
+                  bottleneck.severity === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-blue-100 text-blue-800'
+                }`}>
+                  {bottleneck.severity}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-gray-600">{bottleneck.description}</p>
+              {bottleneck.process && (
+                <div className="mt-2 text-xs text-gray-500">
+                  Process: {bottleneck.process.name} (PID: {bottleneck.process.pid})
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+**frontend/src/components/Recommendations.tsx**
+import React from 'react';
+import { AlertTriangle, AlertCircle, Info, TrendingUp } from 'lucide-react';
+import { OptimizationRecommendation } from '../types';
+
+interface RecommendationsProps {
+  recommendations: OptimizationRecommendation[];
+}
+
+export const Recommendations: React.FC<RecommendationsProps> = ({ recommendations }) => {
+  const getPriorityIcon = (priority: string) => {
+    switch (priority) {
+      case 'CRITICAL':
+        return <AlertCircle className="w-5 h-5 text-red-500" />;
+      case 'HIGH':
+        return <AlertTriangle className="w-5 h-5 text-orange-500" />;
+      default:
+        return <TrendingUp className="w-5 h-5 text-blue-500" />;
+    }
+  };
+
+  const getImpactColor = (impact: string) => {
+    switch (impact) {
+      case 'HIGH':
+        return 'text-green-600 bg-green-100';
+      case 'MEDIUM':
+        return 'text-yellow-600 bg-yellow-100';
+      default:
+        return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  if (recommendations.length === 0) {
+    return (
+      <div className="p-4 text-center text-gray-500">
+        No recommendations at this time. System is optimized.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {recommendations.map((rec, index) => (
+        <div key={index} className="p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
+          <div className="flex items-start space-x-3">
+            {getPriorityIcon(rec.priority)}
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-gray-900">{rec.title}</h4>
+                <span className={`px-2 py-1 text-xs font-medium rounded-full ${getImpactColor(rec.impact)}`}>
+                  {rec.impact} Impact
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-gray-600">{rec.description}</p>
+              <div className="mt-2">
+                <p className="text-sm font-medium text-gray-700">Recommended Action:</p>
+                <p className="text-sm text-gray-600">{rec.action}</p>
+              </div>
+              {rec.estimatedSavings && (
+                <div className="mt-2">
+                  <span className="text-sm font-medium text-green-600">
+                    Estimated Savings: {rec.estimatedSavings}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+**frontend/src/App.tsx**
+import React, { useState } from 'react';
+import { useSocket } from './hooks/useSocket';
+import { ResourceGauge } from './components/ResourceGauge';
+import { BottleneckList } from './components/BottleneckList';
+import { Recommendations } from './components/Recommendations';
+import { Activity, Server, AlertTriangle, TrendingUp, Cpu, MemoryStick, HardDrive } from 'lucide-react';
+import { SystemInsights } from './types';
+
+function App() {
+  const { isConnected, insights, error, startMonitoring, stopMonitoring } = useSocket();
+  const [isMonitoring, setIsMonitoring] = useState(false);
+
+  const handleStartMonitoring = () => {
+    startMonitoring();
+    setIsMonitoring(true);
+  };
+
+  const handleStopMonitoring = () => {
+    stopMonitoring();
+    setIsMonitoring(false);
+  };
+
+  const getHealthColor = (health: string) => {
+    switch (health) {
+      case 'HEALTHY':
+        return 'text-green-600 bg-green-100';
+      case 'WARNING':
+        return 'text-yellow-600 bg-yellow-100';
+      case 'CRITICAL':
+        return 'text-red-600 bg-red-100';
+      default:
+        return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  const getRiskColor = (risk: string) => {
+    switch (risk) {
+      case 'LOW':
+        return 'text-green-600 bg-green-100';
+      case 'MEDIUM':
+        return 'text-yellow-600 bg-yellow-100';
+      case 'HIGH':
+        return 'text-red-600 bg-red-100';
+      default:
+        return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center space-x-3">
+              <Server className="w-8 h-8 text-blue-600" />
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">ProcessOptima AI</h1>
+                <p className="text-sm text-gray-500">Real-time System Performance Analyzer</p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className={`flex items-center space-x-2 px-3 py-1 rounded-full ${
+                isConnected ? 'text-green-600 bg-green-100' : 'text-red-600 bg-red-100'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${
+                  isConnected ? 'bg-green-500' : 'bg-red-500'
+                }`} />
+                <span className="text-sm font-medium">
+                  {isConnected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              {!isMonitoring ? (
+                <button
+                  onClick={handleStartMonitoring}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
+                >
+                  <Activity className="w-4 h-4" />
+                  <span>Start Monitoring</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopMonitoring}
+                  className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center space-x-2"
+                >
+                  <Activity className="w-4 h-4" />
+                  <span>Stop Monitoring</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-center space-x-2 text-red-800">
+              <AlertTriangle className="w-5 h-5" />
+              <span className="font-medium">{error}</span>
+            </div>
+          </div>
+        )}
+
+        {!insights && isMonitoring && (
+          <div className="text-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Collecting system data...</p>
+          </div>
+        )}
+
+        {insights && (
+          <div className="space-y-8">
+            {/* System Overview */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">System Health</h3>
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getHealthColor(insights.aiAnalysis.overallHealth)}`}>
+                    {insights.aiAnalysis.overallHealth}
+                  </span>
+                </div>
+                <div className="mt-4">
+                  <p className="text-3xl font-bold text-gray-900">
+                    {insights.aiAnalysis.performanceScore.toFixed(1)}
+                  </p>
+                  <p className="text-sm text-gray-500">Performance Score</p>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Risk Level</h3>
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getRiskColor(insights.aiAnalysis.riskLevel)}`}>
+                    {insights.aiAnalysis.riskLevel}
+                  </span>
+                </div>
+                <div className="mt-4">
+                  <p className="text-3xl font-bold text-gray-900">
+                    {insights.aiAnalysis.bottlenecks.length}
+                  </p>
+                  <p className="text-sm text-gray-500">Active Issues</p>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center space-x-2">
+                  <Cpu className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">Processes</h3>
+                </div>
+                <div className="mt-4">
+                  <p className="text-3xl font-bold text-gray-900">
+                    {insights.systemMetrics.cpu.processes.length}
+                  </p>
+                  <p className="text-sm text-gray-500">Active Processes</p>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center space-x-2">
+                  <TrendingUp className="w-5 h-5 text-green-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">Forecast</h3>
+                </div>
+                <div className="mt-4">
+                  <p className="text-3xl font-bold text-gray-900">
+                    {insights.forecasts[0]?.confidence ? (insights.forecasts[0].confidence * 100).toFixed(0) + '%' : 'N/A'}
+                  </p>
+                  <p className="text-sm text-gray-500">Confidence</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Resource Gauges */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border">
+              <h3 className="text-xl font-semibold text-gray-900 mb-6">Resource Utilization</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 justify-items-center">
+                <ResourceGauge
+                  value={insights.systemMetrics.cpu.usage}
+                  max={100}
+                  label="CPU Usage"
+                  type="cpu"
+                  size="lg"
+                />
+                <ResourceGauge
+                  value={insights.systemMetrics.memory.usagePercent}
+                  max={100}
+                  label="Memory Usage"
+                  type="memory"
+                  size="lg"
+                />
+                <ResourceGauge
+                  value={insights.systemMetrics.disk.usagePercent}
+                  max={100}
+                  label="Disk Usage"
+                  type="disk"
+                  size="lg"
+                />
+              </div>
+            </div>
+
+            {/* Bottlenecks and Recommendations */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Bottlenecks */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center space-x-2 mb-6">
+                  <AlertTriangle className="w-6 h-6 text-orange-600" />
+                  <h3 className="text-xl font-semibold text-gray-900">Performance Bottlenecks</h3>
+                </div>
+                <BottleneckList bottlenecks={insights.aiAnalysis.bottlenecks} />
+              </div>
+
+              {/* Recommendations */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex items-center space-x-2 mb-6">
+                  <TrendingUp className="w-6 h-6 text-green-600" />
+                  <h3 className="text-xl font-semibold text-gray-900">Optimization Recommendations</h3>
+                </div>
+                <Recommendations recommendations={insights.recommendations} />
+              </div>
+            </div>
+
+            {/* Process List */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border">
+              <h3 className="text-xl font-semibold text-gray-900 mb-6">Top Processes</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-3 font-medium text-gray-900">Process</th>
+                      <th className="text-left py-3 font-medium text-gray-900">PID</th>
+                      <th className="text-left py-3 font-medium text-gray-900">CPU %</th>
+                      <th className="text-left py-3 font-medium text-gray-900">Memory %</th>
+                      <th className="text-left py-3 font-medium text-gray-900">State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {insights.systemMetrics.cpu.processes.slice(0, 10).map((process) => (
+                      <tr key={process.pid} className="border-b hover:bg-gray-50">
+                        <td className="py-3 text-sm text-gray-900">{process.name}</td>
+                        <td className="py-3 text-sm text-gray-600">{process.pid}</td>
+                        <td className="py-3 text-sm text-gray-600">{process.cpuUsage.toFixed(1)}%</td>
+                        <td className="py-3 text-sm text-gray-600">{process.memoryUsage.toFixed(1)}%</td>
+                        <td className="py-3 text-sm text-gray-600">{process.state}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+export default App;
+
+**frontend/src/main.tsx**
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App.tsx'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
+
+**frontend/src/index.css**
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
