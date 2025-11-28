@@ -1,0 +1,914 @@
+**backend/package.json**
+{
+  "name": "process-optima-ai-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/app.ts",
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "docker:build": "docker build -t process-optima-ai ."
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "systeminformation": "^5.12.6",
+    "@tensorflow/tfjs-node": "^4.10.0",
+    "redis": "^4.6.5",
+    "cors": "^2.8.5",
+    "helmet": "^7.0.0",
+    "winston": "^3.10.0",
+    "zod": "^3.21.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.17",
+    "@types/node": "^20.3.1",
+    "typescript": "^5.1.3",
+    "tsx": "^3.12.6"
+  }
+}
+
+**backend/tsconfig.json**
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+
+**backend/src/types/index.ts**
+export interface ProcessInfo {
+  pid: number;
+  name: string;
+  cpuUsage: number;
+  memoryUsage: number;
+  priority: number;
+  state: string;
+  command: string;
+}
+
+export interface CpuMetrics {
+  usage: number;
+  cores: number;
+  temperature?: number;
+  processes: ProcessInfo[];
+  loadAverage: number[];
+}
+
+export interface MemoryMetrics {
+  total: number;
+  used: number;
+  free: number;
+  usagePercent: number;
+  active: number;
+  available: number;
+}
+
+export interface DiskMetrics {
+  total: number;
+  used: number;
+  free: number;
+  usagePercent: number;
+  readBytes: number;
+  writeBytes: number;
+}
+
+export interface NetworkMetrics {
+  bytesIn: number;
+  bytesOut: number;
+  packetsIn: number;
+  packetsOut: number;
+}
+
+export interface SystemMetrics {
+  timestamp: number;
+  cpu: CpuMetrics;
+  memory: MemoryMetrics;
+  disk: DiskMetrics;
+  network: NetworkMetrics;
+}
+
+export interface BottleneckAnalysis {
+  type: 'CPU' | 'MEMORY' | 'DISK' | 'NETWORK' | 'PROCESS';
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  description: string;
+  process?: ProcessInfo;
+  metric: number;
+  threshold: number;
+}
+
+export interface AIAnalysis {
+  bottlenecks: BottleneckAnalysis[];
+  overallHealth: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  performanceScore: number;
+  anomalyDetected: boolean;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+}
+
+export interface ForecastData {
+  timestamp: number;
+  predictedCpuUsage: number;
+  predictedMemoryUsage: number;
+  predictedDiskUsage: number;
+  confidence: number;
+}
+
+export interface OptimizationRecommendation {
+  type: 'PROCESS_OPTIMIZATION' | 'RESOURCE_ALLOCATION' | 'CONFIGURATION' | 'SCALING';
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  title: string;
+  description: string;
+  action: string;
+  impact: 'LOW' | 'MEDIUM' | 'HIGH';
+  estimatedSavings?: string;
+}
+
+export interface SystemInsights {
+  timestamp: number;
+  systemMetrics: SystemMetrics;
+  aiAnalysis: AIAnalysis;
+  forecasts: ForecastData[];
+  recommendations: OptimizationRecommendation[];
+}
+
+**backend/src/utils/logger.ts**
+import winston from 'winston';
+
+export const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  ),
+  defaultMeta: { service: 'process-optima-ai' },
+  transports: [
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    })
+  ],
+});
+
+**backend/src/dataCollector.ts**
+import si from 'systeminformation';
+import { SystemMetrics, ProcessInfo } from './types/index.js';
+import { logger } from './utils/logger.js';
+
+export class SystemDataCollector {
+  private historicalData: SystemMetrics[] = [];
+  private readonly MAX_HISTORY = 1000;
+
+  async collectAllMetrics(): Promise<SystemMetrics> {
+    try {
+      const [
+        cpu,
+        memory,
+        disk,
+        network,
+        processes,
+        currentLoad
+      ] = await Promise.all([
+        si.cpu(),
+        si.mem(),
+        si.fsSize(),
+        si.networkStats(),
+        si.processes(),
+        si.currentLoad()
+      ]);
+
+      const timestamp = Date.now();
+
+      // Get detailed process info
+      const processList: ProcessInfo[] = processes.list
+        .slice(0, 20) // Top 20 processes
+        .map(proc => ({
+          pid: proc.pid,
+          name: proc.name,
+          cpuUsage: proc.cpu,
+          memoryUsage: proc.mem,
+          priority: proc.priority,
+          state: proc.state,
+          command: proc.command
+        }));
+
+      const metrics: SystemMetrics = {
+        timestamp,
+        cpu: {
+          usage: currentLoad.currentLoad,
+          cores: cpu.cores,
+          temperature: await this.getCpuTemperature(),
+          processes: processList,
+          loadAverage: currentLoad.loadAverage
+        },
+        memory: {
+          total: memory.total,
+          used: memory.used,
+          free: memory.free,
+          usagePercent: (memory.used / memory.total) * 100,
+          active: memory.active,
+          available: memory.available
+        },
+        disk: {
+          total: disk[0]?.size || 0,
+          used: disk[0]?.used || 0,
+          free: disk[0]?.available || 0,
+          usagePercent: disk[0]?.use || 0,
+          readBytes: network[0]?.rx_bytes || 0,
+          writeBytes: network[0]?.tx_bytes || 0
+        },
+        network: {
+          bytesIn: network[0]?.rx_bytes || 0,
+          bytesOut: network[0]?.tx_bytes || 0,
+          packetsIn: network[0]?.rx_packets || 0,
+          packetsOut: network[0]?.tx_packets || 0
+        }
+      };
+
+      // Store historical data
+      this.historicalData.push(metrics);
+      if (this.historicalData.length > this.MAX_HISTORY) {
+        this.historicalData.shift();
+      }
+
+      return metrics;
+    } catch (error) {
+      logger.error('Error collecting system metrics:', error);
+      throw error;
+    }
+  }
+
+  private async getCpuTemperature(): Promise<number | undefined> {
+    try {
+      const temp = await si.cpuTemperature();
+      return temp.main;
+    } catch {
+      return undefined;
+    }
+  }
+
+  getHistoricalData(): SystemMetrics[] {
+    return [...this.historicalData];
+  }
+
+  async getDetailedProcesses(): Promise<ProcessInfo[]> {
+    try {
+      const processes = await si.processes();
+      return processes.list
+        .slice(0, 50)
+        .map(proc => ({
+          pid: proc.pid,
+          name: proc.name,
+          cpuUsage: proc.cpu,
+          memoryUsage: proc.mem,
+          priority: proc.priority,
+          state: proc.state,
+          command: proc.command
+        }));
+    } catch (error) {
+      logger.error('Error getting detailed processes:', error);
+      return [];
+    }
+  }
+}
+
+**backend/src/aiAnalyzer.ts**
+import { SystemMetrics, AIAnalysis, BottleneckAnalysis, OptimizationRecommendation } from './types/index.js';
+import { logger } from './utils/logger.js';
+
+export class AIAnalyzer {
+  private readonly THRESHOLDS = {
+    CPU_CRITICAL: 90,
+    CPU_HIGH: 75,
+    MEMORY_CRITICAL: 90,
+    MEMORY_HIGH: 80,
+    DISK_CRITICAL: 95,
+    DISK_HIGH: 85
+  };
+
+  analyzePerformance(metrics: SystemMetrics): AIAnalysis {
+    const bottlenecks: BottleneckAnalysis[] = [];
+    
+    // CPU Analysis
+    if (metrics.cpu.usage > this.THRESHOLDS.CPU_CRITICAL) {
+      bottlenecks.push(this.createCPUBottleneck(metrics.cpu.usage, 'CRITICAL'));
+    } else if (metrics.cpu.usage > this.THRESHOLDS.CPU_HIGH) {
+      bottlenecks.push(this.createCPUBottleneck(metrics.cpu.usage, 'HIGH'));
+    }
+
+    // Memory Analysis
+    if (metrics.memory.usagePercent > this.THRESHOLDS.MEMORY_CRITICAL) {
+      bottlenecks.push(this.createMemoryBottleneck(metrics.memory.usagePercent, 'CRITICAL'));
+    } else if (metrics.memory.usagePercent > this.THRESHOLDS.MEMORY_HIGH) {
+      bottlenecks.push(this.createMemoryBottleneck(metrics.memory.usagePercent, 'HIGH'));
+    }
+
+    // Disk Analysis
+    if (metrics.disk.usagePercent > this.THRESHOLDS.DISK_CRITICAL) {
+      bottlenecks.push(this.createDiskBottleneck(metrics.disk.usagePercent, 'CRITICAL'));
+    } else if (metrics.disk.usagePercent > this.THRESHOLDS.DISK_HIGH) {
+      bottlenecks.push(this.createDiskBottleneck(metrics.disk.usagePercent, 'HIGH'));
+    }
+
+    // Process-level analysis
+    const problematicProcesses = this.analyzeProcesses(metrics.cpu.processes);
+    bottlenecks.push(...problematicProcesses);
+
+    const overallHealth = this.calculateOverallHealth(bottlenecks);
+    const performanceScore = this.calculatePerformanceScore(metrics, bottlenecks);
+    const anomalyDetected = this.detectAnomalies(metrics);
+    const riskLevel = this.calculateRiskLevel(bottlenecks);
+
+    return {
+      bottlenecks,
+      overallHealth,
+      performanceScore,
+      anomalyDetected,
+      riskLevel
+    };
+  }
+
+  private createCPUBottleneck(usage: number, severity: BottleneckAnalysis['severity']): BottleneckAnalysis {
+    return {
+      type: 'CPU',
+      severity,
+      description: `CPU usage at ${usage.toFixed(1)}% - ${this.getCPUBottleneckDescription(severity)}`,
+      metric: usage,
+      threshold: severity === 'CRITICAL' ? this.THRESHOLDS.CPU_CRITICAL : this.THRESHOLDS.CPU_HIGH
+    };
+  }
+
+  private createMemoryBottleneck(usage: number, severity: BottleneckAnalysis['severity']): BottleneckAnalysis {
+    return {
+      type: 'MEMORY',
+      severity,
+      description: `Memory usage at ${usage.toFixed(1)}% - ${this.getMemoryBottleneckDescription(severity)}`,
+      metric: usage,
+      threshold: severity === 'CRITICAL' ? this.THRESHOLDS.MEMORY_CRITICAL : this.THRESHOLDS.MEMORY_HIGH
+    };
+  }
+
+  private createDiskBottleneck(usage: number, severity: BottleneckAnalysis['severity']): BottleneckAnalysis {
+    return {
+      type: 'DISK',
+      severity,
+      description: `Disk usage at ${usage.toFixed(1)}% - ${this.getDiskBottleneckDescription(severity)}`,
+      metric: usage,
+      threshold: severity === 'CRITICAL' ? this.THRESHOLDS.DISK_CRITICAL : this.THRESHOLDS.DISK_HIGH
+    };
+  }
+
+  private analyzeProcesses(processes: any[]): BottleneckAnalysis[] {
+    const bottlenecks: BottleneckAnalysis[] = [];
+    
+    processes.forEach(process => {
+      if (process.cpuUsage > 10) {
+        bottlenecks.push({
+          type: 'PROCESS',
+          severity: process.cpuUsage > 25 ? 'HIGH' : 'MEDIUM',
+          description: `Process ${process.name} (PID: ${process.pid}) using ${process.cpuUsage}% CPU`,
+          process,
+          metric: process.cpuUsage,
+          threshold: 10
+        });
+      }
+
+      if (process.memoryUsage > 5) {
+        bottlenecks.push({
+          type: 'PROCESS',
+          severity: process.memoryUsage > 10 ? 'HIGH' : 'MEDIUM',
+          description: `Process ${process.name} (PID: ${process.pid}) using ${process.memoryUsage}% memory`,
+          process,
+          metric: process.memoryUsage,
+          threshold: 5
+        });
+      }
+    });
+
+    return bottlenecks.slice(0, 5); // Return top 5 problematic processes
+  }
+
+  private calculateOverallHealth(bottlenecks: BottleneckAnalysis[]): AIAnalysis['overallHealth'] {
+    const criticalCount = bottlenecks.filter(b => b.severity === 'CRITICAL').length;
+    const highCount = bottlenecks.filter(b => b.severity === 'HIGH').length;
+
+    if (criticalCount > 0) return 'CRITICAL';
+    if (highCount > 0 || bottlenecks.length > 3) return 'WARNING';
+    return 'HEALTHY';
+  }
+
+  private calculatePerformanceScore(metrics: SystemMetrics, bottlenecks: BottleneckAnalysis[]): number {
+    let score = 100;
+    
+    // Deduct points for high resource usage
+    score -= Math.max(0, metrics.cpu.usage - 50) * 0.5;
+    score -= Math.max(0, metrics.memory.usagePercent - 50) * 0.5;
+    score -= Math.max(0, metrics.disk.usagePercent - 80) * 0.8;
+    
+    // Deduct points for bottlenecks
+    bottlenecks.forEach(bottleneck => {
+      switch (bottleneck.severity) {
+        case 'CRITICAL': score -= 20; break;
+        case 'HIGH': score -= 10; break;
+        case 'MEDIUM': score -= 5; break;
+        case 'LOW': score -= 2; break;
+      }
+    });
+
+    return Math.max(0, Math.min(100, score));
+  }
+
+  private detectAnomalies(metrics: SystemMetrics): boolean {
+    // Simple anomaly detection - in production, use ML models
+    return metrics.cpu.usage > 95 || 
+           metrics.memory.usagePercent > 95 || 
+           metrics.disk.usagePercent > 98;
+  }
+
+  private calculateRiskLevel(bottlenecks: BottleneckAnalysis[]): AIAnalysis['riskLevel'] {
+    const criticalCount = bottlenecks.filter(b => b.severity === 'CRITICAL').length;
+    const highCount = bottlenecks.filter(b => b.severity === 'HIGH').length;
+
+    if (criticalCount > 0) return 'HIGH';
+    if (highCount > 0 || bottlenecks.length > 5) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  generateRecommendations(analysis: AIAnalysis): OptimizationRecommendation[] {
+    const recommendations: OptimizationRecommendation[] = [];
+
+    analysis.bottlenecks.forEach(bottleneck => {
+      switch (bottleneck.type) {
+        case 'CPU':
+          recommendations.push({
+            type: 'PROCESS_OPTIMIZATION',
+            priority: bottleneck.severity === 'CRITICAL' ? 'CRITICAL' : 'HIGH',
+            title: 'Optimize CPU Usage',
+            description: `High CPU usage detected (${bottleneck.metric.toFixed(1)}%)`,
+            action: 'Consider terminating or optimizing resource-intensive processes',
+            impact: 'HIGH',
+            estimatedSavings: `Reduce CPU usage by ${(bottleneck.metric - 50).toFixed(1)}%`
+          });
+          break;
+
+        case 'MEMORY':
+          recommendations.push({
+            type: 'RESOURCE_ALLOCATION',
+            priority: bottleneck.severity === 'CRITICAL' ? 'CRITICAL' : 'HIGH',
+            title: 'Optimize Memory Usage',
+            description: `High memory usage detected (${bottleneck.metric.toFixed(1)}%)`,
+            action: 'Consider adding more RAM or optimizing memory usage in applications',
+            impact: 'HIGH',
+            estimatedSavings: `Free up ${(bottleneck.metric * 0.1).toFixed(1)}GB memory`
+          });
+          break;
+
+        case 'PROCESS':
+          if (bottleneck.process) {
+            recommendations.push({
+              type: 'PROCESS_OPTIMIZATION',
+              priority: 'MEDIUM',
+              title: `Optimize Process: ${bottleneck.process.name}`,
+              description: `Process using ${bottleneck.metric}% ${bottleneck.metric === bottleneck.process.cpuUsage ? 'CPU' : 'memory'}`,
+              action: `Consider restarting or optimizing ${bottleneck.process.name}`,
+              impact: 'MEDIUM',
+              estimatedSavings: `Save ${bottleneck.metric}% resources`
+            });
+          }
+          break;
+      }
+    });
+
+    return recommendations.slice(0, 10); // Return top 10 recommendations
+  }
+
+  private getCPUBottleneckDescription(severity: BottleneckAnalysis['severity']): string {
+    switch (severity) {
+      case 'CRITICAL': return 'System may become unresponsive';
+      case 'HIGH': return 'Performance degradation expected';
+      default: return 'Monitor closely';
+    }
+  }
+
+  private getMemoryBottleneckDescription(severity: BottleneckAnalysis['severity']): string {
+    switch (severity) {
+      case 'CRITICAL': return 'Risk of system crashes';
+      case 'HIGH': return 'Swapping may occur, slowing system';
+      default: return 'Consider memory optimization';
+    }
+  }
+
+  private getDiskBottleneckDescription(severity: BottleneckAnalysis['severity']): string {
+    switch (severity) {
+      case 'CRITICAL': return 'Disk nearly full, system instability risk';
+      case 'HIGH': return 'Low disk space affecting performance';
+      default: return 'Consider cleaning up disk space';
+    }
+  }
+}
+**backend/src/forecasting.ts**
+import { SystemMetrics, ForecastData } from './types/index.js';
+import { logger } from './utils/logger.js';
+
+export class ResourceForecaster {
+  private readonly FORECAST_HORIZON = 6; // 6 data points (12 minutes at 2s intervals)
+
+  predictFutureResources(historicalData: SystemMetrics[]): ForecastData[] {
+    if (historicalData.length < 10) {
+      return this.generateDefaultForecast();
+    }
+
+    try {
+      const recentData = historicalData.slice(-30); // Use last 30 data points
+      
+      const forecasts: ForecastData[] = [];
+      
+      for (let i = 1; i <= this.FORECAST_HORIZON; i++) {
+        const timestamp = Date.now() + (i * 2000); // 2 second intervals
+        
+        const cpuForecast = this.forecastCPU(recentData, i);
+        const memoryForecast = this.forecastMemory(recentData, i);
+        const diskForecast = this.forecastDisk(recentData, i);
+        
+        forecasts.push({
+          timestamp,
+          predictedCpuUsage: cpuForecast.value,
+          predictedMemoryUsage: memoryForecast.value,
+          predictedDiskUsage: diskForecast.value,
+          confidence: Math.min(cpuForecast.confidence, memoryForecast.confidence, diskForecast.confidence)
+        });
+      }
+      
+      return forecasts;
+    } catch (error) {
+      logger.error('Error in resource forecasting:', error);
+      return this.generateDefaultForecast();
+    }
+  }
+
+  private forecastCPU(data: SystemMetrics[], stepsAhead: number): { value: number; confidence: number } {
+    const cpuUsages = data.map(d => d.cpu.usage);
+    const trend = this.calculateTrend(cpuUsages);
+    
+    const lastValue = cpuUsages[cpuUsages.length - 1];
+    const predicted = Math.min(100, Math.max(0, lastValue + (trend * stepsAhead * 0.1)));
+    
+    const volatility = this.calculateVolatility(cpuUsages);
+    const confidence = Math.max(0.5, 1 - (volatility * 0.1));
+    
+    return { value: predicted, confidence };
+  }
+
+  private forecastMemory(data: SystemMetrics[], stepsAhead: number): { value: number; confidence: number } {
+    const memoryUsages = data.map(d => d.memory.usagePercent);
+    const trend = this.calculateTrend(memoryUsages);
+    
+    const lastValue = memoryUsages[memoryUsages.length - 1];
+    const predicted = Math.min(100, Math.max(0, lastValue + (trend * stepsAhead * 0.05)));
+    
+    const volatility = this.calculateVolatility(memoryUsages);
+    const confidence = Math.max(0.7, 1 - (volatility * 0.05));
+    
+    return { value: predicted, confidence };
+  }
+
+  private forecastDisk(data: SystemMetrics[], stepsAhead: number): { value: number; confidence: number } {
+    const diskUsages = data.map(d => d.disk.usagePercent);
+    const trend = this.calculateTrend(diskUsages);
+    
+    const lastValue = diskUsages[diskUsages.length - 1];
+    const predicted = Math.min(100, Math.max(lastValue, lastValue + (trend * stepsAhead * 0.01)));
+    
+    // Disk usage typically changes slowly, so higher confidence
+    const confidence = 0.9;
+    
+    return { value: predicted, confidence };
+  }
+
+  private calculateTrend(data: number[]): number {
+    if (data.length < 2) return 0;
+    
+    const n = data.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    
+    for (let i = 0; i < n; i++) {
+      sumX += i;
+      sumY += data[i];
+      sumXY += i * data[i];
+      sumXX += i * i;
+    }
+    
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    return slope;
+  }
+
+  private calculateVolatility(data: number[]): number {
+    if (data.length < 2) return 0;
+    
+    let sumSquaredDiff = 0;
+    const mean = data.reduce((a, b) => a + b, 0) / data.length;
+    
+    for (const value of data) {
+      sumSquaredDiff += Math.pow(value - mean, 2);
+    }
+    
+    return Math.sqrt(sumSquaredDiff / data.length);
+  }
+
+  private generateDefaultForecast(): ForecastData[] {
+    const forecasts: ForecastData[] = [];
+    const timestamp = Date.now();
+    
+    for (let i = 1; i <= this.FORECAST_HORIZON; i++) {
+      forecasts.push({
+        timestamp: timestamp + (i * 2000),
+        predictedCpuUsage: 50,
+        predictedMemoryUsage: 60,
+        predictedDiskUsage: 70,
+        confidence: 0.5
+      });
+    }
+    
+    return forecasts;
+  }
+}
+**backend/src/app.ts**
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import helmet from 'helmet';
+import { SystemDataCollector } from './dataCollector.js';
+import { AIAnalyzer } from './aiAnalyzer.js';
+import { ResourceForecaster } from './forecasting.js';
+import { logger } from './utils/logger.js';
+
+const app = express();
+const server = createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
+
+// Initialize services
+const dataCollector = new SystemDataCollector();
+const aiAnalyzer = new AIAnalyzer();
+const forecaster = new ResourceForecaster();
+
+// Monitoring state
+let isMonitoring = false;
+let monitoringInterval: NodeJS.Timeout | null = null;
+
+// API Routes
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    monitoring: isMonitoring 
+  });
+});
+
+app.post('/api/monitoring/start', async (req, res) => {
+  if (isMonitoring) {
+    return res.status(400).json({ error: 'Monitoring already started' });
+  }
+
+  isMonitoring = true;
+  startMonitoring();
+
+  res.json({ 
+    status: 'monitoring_started', 
+    timestamp: new Date().toISOString() 
+  });
+});
+
+app.post('/api/monitoring/stop', (req, res) => {
+  if (!isMonitoring) {
+    return res.status(400).json({ error: 'Monitoring not started' });
+  }
+
+  isMonitoring = false;
+  stopMonitoring();
+
+  res.json({ 
+    status: 'monitoring_stopped', 
+    timestamp: new Date().toISOString() 
+  });
+});
+
+app.get('/api/processes', async (req, res) => {
+  try {
+    const processes = await dataCollector.getDetailedProcesses();
+    res.json(processes);
+  } catch (error) {
+    logger.error('Error fetching processes:', error);
+    res.status(500).json({ error: 'Failed to fetch processes' });
+  }
+});
+
+app.get('/api/metrics/current', async (req, res) => {
+  try {
+    const metrics = await dataCollector.collectAllMetrics();
+    const analysis = aiAnalyzer.analyzePerformance(metrics);
+    const historicalData = dataCollector.getHistoricalData();
+    const forecasts = forecaster.predictFutureResources(historicalData);
+    const recommendations = aiAnalyzer.generateRecommendations(analysis);
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      systemMetrics: metrics,
+      aiAnalysis: analysis,
+      forecasts,
+      recommendations
+    });
+  } catch (error) {
+    logger.error('Error fetching current metrics:', error);
+    res.status(500).json({ error: 'Failed to fetch metrics' });
+  }
+});
+
+// Socket.io for real-time updates
+io.on('connection', (socket) => {
+  logger.info(`Client connected: ${socket.id}`);
+
+  socket.on('disconnect', () => {
+    logger.info(`Client disconnected: ${socket.id}`);
+  });
+
+  socket.on('start_monitoring', () => {
+    if (!isMonitoring) {
+      isMonitoring = true;
+      startMonitoring();
+    }
+  });
+
+  socket.on('stop_monitoring', () => {
+    if (isMonitoring) {
+      isMonitoring = false;
+      stopMonitoring();
+    }
+  });
+});
+
+// Monitoring functions
+function startMonitoring() {
+  logger.info('Starting system monitoring...');
+  
+  monitoringInterval = setInterval(async () => {
+    if (!isMonitoring) return;
+
+    try {
+      const metrics = await dataCollector.collectAllMetrics();
+      const analysis = aiAnalyzer.analyzePerformance(metrics);
+      const historicalData = dataCollector.getHistoricalData();
+      const forecasts = forecaster.predictFutureResources(historicalData);
+      const recommendations = aiAnalyzer.generateRecommendations(analysis);
+
+      const insights = {
+        timestamp: new Date().toISOString(),
+        systemMetrics: metrics,
+        aiAnalysis: analysis,
+        forecasts,
+        recommendations
+      };
+
+      // Emit to all connected clients
+      io.emit('system_insights', insights);
+      
+    } catch (error) {
+      logger.error('Error in monitoring loop:', error);
+    }
+  }, 2000); // Update every 2 seconds
+}
+
+function stopMonitoring() {
+  logger.info('Stopping system monitoring...');
+  
+  if (monitoringInterval) {
+    clearInterval(monitoringInterval);
+    monitoringInterval = null;
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received, shutting down gracefully');
+  stopMonitoring();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT received, shutting down gracefully');
+  stopMonitoring();
+  process.exit(0);
+});
+
+// Start server
+server.listen(PORT, () => {
+  logger.info(`ProcessOptima AI Server running on port ${PORT}`);
+  logger.info(`Health check: http://localhost:${PORT}/api/health`);
+});
+
+export default app;
+
+**backend/Dockerfile**
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy source code
+COPY src/ ./src/
+
+# Build the application
+RUN npm run build
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
+
+# Change ownership
+RUN chown -R nextjs:nodejs /app
+USER nextjs
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node dist/health-check.js
+
+CMD ["node", "dist/app.js"]
+
+**docker-compose.yml**
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://localhost:3000
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+  
