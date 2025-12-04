@@ -64,32 +64,6 @@ Node.js 18+ and npm
 
 Docker and Docker Compose (recommended)
 
-Git
-
-Option 1: Docker (Recommended)
-bash
-# Clone the repository
-git clone https://github.com/your-username/process-optima-ai.git
-cd process-optima-ai
-
-# Start all services
-docker-compose up -d
-
-# Access the application
-# Frontend: http://localhost:5173
-# Backend API: http://localhost:3000
-# API Health Check: http://localhost:3000/api/health
-Option 2: Manual Installation
-Backend Setup
-bash
-cd backend
-npm install
-npm run dev
-Frontend Setup
-bash
-cd frontend
-npm install
-npm run dev
 📁 Project Structure
 text
 process-optima-ai/
